@@ -14,6 +14,7 @@ from utils.logger import setup_logger
 @dataclass
 class NotionTicket:
     page_id: str = ""
+    notion_url: str = ""
     judul: str = ""
     tipe: str = ""
     prioritas: str = ""
@@ -66,6 +67,25 @@ def _get_status_value(prop: Any) -> str:
         return ""
 
 
+def _get_formula_value(prop: Any) -> str:
+    """Safely extract a Notion formula property result."""
+    if not prop:
+        return ""
+    try:
+        formula = prop.get("formula")
+        if formula and isinstance(formula, dict):
+            # Formula results can be string, number, boolean, etc.
+            ftype = formula.get("type", "")
+            if ftype == "string":
+                return formula.get("string") or ""
+            if ftype == "number":
+                return str(formula.get("number", ""))
+            return str(formula.get(ftype, ""))
+        return ""
+    except (AttributeError, TypeError):
+        return ""
+
+
 def _get_url_value(prop: Any) -> str:
     """Safely extract a Notion url property."""
     if not prop:
@@ -88,7 +108,7 @@ class NotionClient:
         reraise=True,
     )
     def query_database(self) -> list[dict[str, Any]]:
-        """Return raw page objects from Notion filtered by selected criteria."""
+        """Return raw page objects from Notion where 'Create GitHub Issue' checkbox is checked."""
         self._logger.info("Querying Notion database %s", self._config.notion_database_id)
 
         try:
@@ -97,8 +117,8 @@ class NotionClient:
                 filter={
                     "and": [
                         {
-                            "property": "Status",
-                            "status": {"equals": self._config.notion_trigger_status},
+                            "property": "Create GitHub Issue",
+                            "checkbox": {"equals": True},
                         },
                         {
                             "property": "GitHub Issue Number",
@@ -112,24 +132,37 @@ class NotionClient:
             raise
 
         pages: list[dict[str, Any]] = response.get("results", [])
-        self._logger.info("Found %d page(s) ready for engineering", len(pages))
+        self._logger.info("Found %d page(s) with Create GitHub Issue checked", len(pages))
         return pages
 
     @staticmethod
-    def parse_page(page: dict[str, Any]) -> NotionTicket:
+    def parse_page(page: dict[str, Any], logger: "logging.Logger | None" = None) -> NotionTicket:
         props: dict[str, Any] = page.get("properties", {})
+        page_id = page.get("id", "")
+        notion_url = f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else ""
+
+        # Debug: log all property names and their types
+        if logger:
+            prop_names = sorted(props.keys())
+            logger.info("Page %s has properties: %s", page_id, prop_names)
+            for pname in prop_names:
+                pval = props.get(pname, {})
+                ptype = pval.get("type", "unknown")
+                logger.info("  Property '%s' → type=%s", pname, ptype)
+
         return NotionTicket(
-            page_id=page.get("id", ""),
+            page_id=page_id,
+            notion_url=notion_url,
             judul=_get_plain_text(props.get("Judul")),
             tipe=_get_select_value(props.get("Tipe")),
             prioritas=_get_select_value(props.get("Prioritas")),
-            modul=_get_select_value(props.get("Modul")),
+            modul=_get_select_value(props.get("Modul/Area Sistem")),
             deskripsi_masalah=_get_plain_text(props.get("Deskripsi Masalah")),
             dampak_bisnis=_get_plain_text(props.get("Dampak Bisnis")),
-            what_needs_to_be_done=_get_plain_text(props.get("What Needs to Be Done")),
+            what_needs_to_be_done=_get_plain_text(props.get("What Needs To Be Done")),
             acceptance_criteria=_get_plain_text(props.get("Acceptance Criteria")),
-            hesk_ref=_get_plain_text(props.get("Hesk Ref")),
-            affected_criteria=_get_plain_text(props.get("Affected Criteria")),
+            hesk_ref=_get_formula_value(props.get("Hesk Ref")),
+            affected_criteria=_get_plain_text(props.get("Affected Area")),
             github_issue_number=_get_plain_text(props.get("GitHub Issue Number")),
             github_issue_url=_get_url_value(props.get("GitHub Issue URL")),
             status=_get_status_value(props.get("Status")),
@@ -141,7 +174,12 @@ class NotionClient:
         reraise=True,
     )
     def update_page_after_sync(self, ticket: NotionTicket, github_issue_number: int, github_issue_url: str) -> None:
-        """Update a Notion page with GitHub issue data and change status."""
+        """Update a Notion page with GitHub issue data and change status.
+        
+        Note: 'Create GitHub Issue' checkbox is NOT unchecked here.
+        It stays checked so the webhook can still identify this page
+        and update its status when GitHub events occur (e.g. assigned).
+        """
         self._logger.info("Updating Notion page %s with issue #%d", ticket.page_id, github_issue_number)
 
         try:

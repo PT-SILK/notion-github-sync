@@ -48,7 +48,7 @@ class SyncService:
             return counters
 
         for page in pages:
-            ticket = self._notion.parse_page(page)
+            ticket = self._notion.parse_page(page, logger=self._logger)
 
             repo_name = _clean_repo_name(ticket.modul)
 

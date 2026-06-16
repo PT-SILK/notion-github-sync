@@ -29,7 +29,7 @@ def main() -> None:
     def run_webhook() -> None:
         """Run the Flask webhook server."""
         webhook_app.run(
-            host=config.webhook_host,
+            host="[IP_ADDRESS]",
             port=config.webhook_port,
             debug=False,
             use_reloader=False,
